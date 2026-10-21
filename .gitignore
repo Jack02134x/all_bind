@@ -1,0 +1,32 @@
+# --- Build output ---
+/all_bind
+*.o
+/all_bind-*.tar.gz
+
+# --- makepkg (make pkg) ---
+/packaging/src/
+/packaging/pkg/
+/packaging/*.tar.gz
+/packaging/*.tar.zst
+/packaging/*.pkg.tar.*
+/packaging/*.log
+
+# --- Personal setup (lives in ~/.config/all_bind; old copies next to the source) ---
+config.json
+config.json.bak
+all_bind.conf
+.engine.pid
+.command-*
+.cmd-*.tmp
+*.tmp
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
