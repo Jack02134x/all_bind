@@ -1,0 +1,21 @@
+# all_bind as a root system service for one user's config.
+#
+#   sudo systemctl enable --now all_bind@USERNAME
+#
+# It reads ~USERNAME/.config/all_bind/all_bind.conf (made with all_bind-gui
+# or all_bind --cli) and reloads by itself when that file changes. Commands
+# and notifications it starts run as USERNAME, not root. Running as root it
+# needs no group membership and starts at boot, before anyone logs in.
+
+[Unit]
+Description=all_bind input remapper (config of %i)
+After=systemd-udevd.service systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/all_bind --user %i
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

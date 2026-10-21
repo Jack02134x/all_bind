@@ -1,0 +1,20 @@
+post_install() {
+    cat <<'EOF'
+>>> all_bind installed.
+>>>   Set it up:     open "all_bind" from your app menu, or all_bind --cli help
+>>>   Run it, pick one:
+>>>     at login (as you):   add yourself to the input group once
+>>>                          (sudo usermod -aG input $USER, then log out/in)
+>>>                          and start `all_bind` from your session,
+>>>                          e.g. Hyprland: exec-once = all_bind
+>>>     at boot (as root):   sudo systemctl enable --now all_bind@$USER
+>>>   Switch profiles:       all_bind next / all_bind prev
+>>> The config lives in ~/.config/all_bind/.
+EOF
+}
+
+post_upgrade() {
+    echo ">>> all_bind updated - restart it to use the new engine:"
+    echo ">>>   press Restart in the GUI, all_bind --cli restart, or"
+    echo ">>>   sudo systemctl restart all_bind@\$USER if you use the service."
+}

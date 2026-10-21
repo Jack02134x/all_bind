@@ -1,0 +1,26 @@
+# Maintainer: jack <your-email-here>
+pkgname=all_bind
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Bind anything on any input device to keys, combos, turbo or macros (evdev/uinput), with a GUI and CLI"
+arch=('x86_64' 'aarch64')
+url="https://github.com/YOUR_GITHUB_USER/all_bind"
+license=('MIT')
+depends=('glibc' 'python' 'python-evdev' 'pyside6')
+optdepends=('libnotify: notifications when switching profiles'
+            'polkit: Restart / Stop of the system service from the GUI')
+install=all_bind.install
+# `make pkg` puts a local tarball with this name next to the PKGBUILD,
+# so makepkg uses it instead of downloading.
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    make
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    make DESTDIR="$pkgdir" PREFIX=/usr install
+}

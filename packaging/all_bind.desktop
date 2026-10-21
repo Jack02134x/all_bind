@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=all_bind
+GenericName=Input Remapper
+Comment=Bind anything on any input device to keys, combos, turbo or macros
+Exec=all_bind-gui
+Icon=input-mouse
+Terminal=false
+Categories=Settings;HardwareSettings;Utility;
+Keywords=mouse;keyboard;controller;gamepad;remap;macro;turbo;bind;
