@@ -1670,125 +1670,214 @@ static void drop_device(int idx, const char *reason)
     send_status();
 }
 
-static void scan_devices(void)
+/*
+ * Opening a device node isn't free: some (audio jacks, i2c touchpads) wake
+ * hardware and take 10-20 ms each, and the main loop - which moves the
+ * mouse - waits meanwhile. So each node is opened once to learn its name;
+ * after that only new nodes (announced by inotify on /dev/input), devices
+ * the config wants, and busy devices being retried are opened again.
+ */
+#define MAX_SEEN 256
+
+struct seen {
+    char path[64];
+    char name[NAME_LEN];
+    int vendor, product;
+};
+
+static struct seen seen[MAX_SEEN];
+static int n_seen;
+
+static struct seen *seen_find(const char *path)
 {
-    struct failed prev[MAX_DEVICES];
-    int n_prev = n_failed;
-    DIR *dir;
-    struct dirent *de;
-    int added = 0;
+    for (int i = 0; i < n_seen; i++)
+        if (!strcmp(seen[i].path, path))
+            return &seen[i];
+    return NULL;
+}
 
-    last_scan = time(NULL);
-    memcpy(prev, failed, sizeof(failed));
-    n_failed = 0;
+static void seen_forget(const char *path)
+{
+    struct seen *s = seen_find(path);
+    if (s)
+        *s = seen[--n_seen];
+}
 
-    dir = opendir("/dev/input");
-    if (!dir)
-        return;
+static void seen_add(const char *path, const char *name, int vendor, int product)
+{
+    struct seen *s = seen_find(path);
 
-    while ((de = readdir(dir))) {
-        char path[64];
-        char name[NAME_LEN] = "";
-        struct input_id id;
-        unsigned long relbits[BITS_LEN(REL_MAX)] = { 0 };
-        unsigned long evbits[BITS_LEN(EV_MAX)] = { 0 };
-        int fd, slot = -1, open_already = 0;
+    if (!s) {
+        if (n_seen >= MAX_SEEN)
+            return;
+        s = &seen[n_seen++];
+    }
+    snprintf(s->path, sizeof(s->path), "%s", path);
+    snprintf(s->name, sizeof(s->name), "%s", name);
+    s->vendor = vendor;
+    s->product = product;
+}
 
-        if (strncmp(de->d_name, "event", 5) != 0)
-            continue;
-        snprintf(path, sizeof(path), "/dev/input/%.40s", de->d_name);
+static int failed_index(const char *path)
+{
+    for (int i = 0; i < n_failed; i++)
+        if (!strcmp(failed[i].path, path))
+            return i;
+    return -1;
+}
 
-        for (int i = 0; i < MAX_DEVICES; i++) {
-            if (devs[i] && !strcmp(devs[i]->path, path))
-                open_already = 1;
-            if (!devs[i] && slot < 0)
-                slot = i;
-        }
-        if (open_already || slot < 0)
-            continue;
+static void failed_forget(const char *path)
+{
+    int i = failed_index(path);
+    if (i >= 0)
+        failed[i] = failed[--n_failed];
+}
 
-        /* RDWR so LED state can be written back; fall back to read-only. */
-        fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
-        if (fd < 0)
-            fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-        if (fd < 0)
-            continue;
+/* Grab one /dev/input/eventN if the config wants it. Returns 1 if added. */
+static int probe_node(const char *path)
+{
+    char name[NAME_LEN] = "";
+    unsigned long relbits[BITS_LEN(REL_MAX)] = { 0 };
+    unsigned long evbits[BITS_LEN(EV_MAX)] = { 0 };
+    struct input_id id;
+    struct seen *s = seen_find(path);
+    int fd, slot = -1;
 
-        if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0
-            || ioctl(fd, EVIOCGID, &id) < 0
-            || is_own_device(name)
-            || !wanted(name, id.vendor, id.product)) {
-            close(fd);
-            continue;
-        }
+    for (int i = 0; i < MAX_DEVICES; i++) {
+        if (devs[i] && !strcmp(devs[i]->path, path))
+            return 0;
+        if (!devs[i] && slot < 0)
+            slot = i;
+    }
+    if (slot < 0)
+        return 0;
 
-        if (ioctl(fd, EVIOCGRAB, 1) < 0) {
-            int known = 0;
-            for (int i = 0; i < n_prev; i++)
-                if (!strcmp(prev[i].path, path))
-                    known = 1;
-            if (!known)
-                logmsg("cannot grab %s (%s): %s%s", name, path, strerror(errno),
-                       errno == EBUSY ? " - another program has it (e.g. mouse_invert)" : "");
+    /* Known and not wanted: don't touch the hardware. */
+    if (s && (is_own_device(s->name) || !wanted(s->name, s->vendor, s->product))) {
+        failed_forget(path);
+        return 0;
+    }
+
+    /* RDWR so LED state can be written back; fall back to read-only. */
+    fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0)
+        fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0)
+        return 0;       /* not ours to read (yet): udev may still be setting it up */
+
+    if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0 || ioctl(fd, EVIOCGID, &id) < 0) {
+        close(fd);
+        return 0;
+    }
+    seen_add(path, name, id.vendor, id.product);
+
+    if (is_own_device(name) || !wanted(name, id.vendor, id.product)) {
+        close(fd);
+        failed_forget(path);
+        return 0;
+    }
+
+    if (ioctl(fd, EVIOCGRAB, 1) < 0) {
+        if (failed_index(path) < 0) {
+            logmsg("cannot grab %s (%s): %s%s", name, path, strerror(errno),
+                   errno == EBUSY ? " - another program has it (e.g. mouse_invert)" : "");
             if (n_failed < MAX_DEVICES) {
                 snprintf(failed[n_failed].path, sizeof(failed[0].path), "%s", path);
                 snprintf(failed[n_failed].name, sizeof(failed[0].name), "%s", name);
                 n_failed++;
             }
+        }
+        close(fd);
+        return 0;
+    }
+    failed_forget(path);
+
+    struct dev *d = calloc(1, sizeof(*d));
+    d->fd = fd;
+    d->clone_fd = -1;
+    snprintf(d->path, sizeof(d->path), "%s", path);
+    snprintf(d->name, sizeof(d->name), "%s", name);
+
+    ioctl(fd, EVIOCGBIT(0, sizeof(evbits)), evbits);
+    d->has_led = test_bit(evbits, EV_LED);
+    if (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(relbits)), relbits) >= 0) {
+        d->hires_w = test_bit(relbits, REL_WHEEL_HI_RES);
+        d->hires_hw = test_bit(relbits, REL_HWHEEL_HI_RES);
+    }
+
+    if (needs_clone(fd)) {
+        d->clone_fd = clone_create(fd, name);
+        if (d->clone_fd < 0) {
+            ioctl(fd, EVIOCGRAB, 0);
             close(fd);
+            free(d);
+            return 0;
+        }
+    }
+
+    devs[slot] = d;
+    logmsg("grabbed %s (%s)%s", name, path, d->clone_fd >= 0 ? " [own clone]" : "");
+    return 1;
+}
+
+static void scan_devices(void)
+{
+    DIR *dir = opendir("/dev/input");
+    struct dirent *de;
+    int added = 0, failed_before = n_failed;
+
+    if (!dir)
+        return;
+    while ((de = readdir(dir))) {
+        char path[64];
+        if (strncmp(de->d_name, "event", 5) != 0)
             continue;
-        }
-
-        struct dev *d = calloc(1, sizeof(*d));
-        d->fd = fd;
-        d->clone_fd = -1;
-        snprintf(d->path, sizeof(d->path), "%s", path);
-        snprintf(d->name, sizeof(d->name), "%s", name);
-
-        ioctl(fd, EVIOCGBIT(0, sizeof(evbits)), evbits);
-        d->has_led = test_bit(evbits, EV_LED);
-        if (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(relbits)), relbits) >= 0) {
-            d->hires_w = test_bit(relbits, REL_WHEEL_HI_RES);
-            d->hires_hw = test_bit(relbits, REL_HWHEEL_HI_RES);
-        }
-
-        if (needs_clone(fd)) {
-            d->clone_fd = clone_create(fd, name);
-            if (d->clone_fd < 0) {
-                ioctl(fd, EVIOCGRAB, 0);
-                close(fd);
-                free(d);
-                continue;
-            }
-        }
-
-        devs[slot] = d;
-        logmsg("grabbed %s (%s)%s", name, path, d->clone_fd >= 0 ? " [own clone]" : "");
-        added = 1;
+        snprintf(path, sizeof(path), "/dev/input/%.40s", de->d_name);
+        added |= probe_node(path);
     }
     closedir(dir);
 
-    if (added) {
+    if (added)
         out_sync_caps();
-    }
-    if (added || n_failed != n_prev)
+    if (added || n_failed != failed_before)
         send_status();
 }
 
-static int devices_missing(void)
+/* Devices another program had grabbed: try those (and only those) again. */
+static void retry_failed(void)
 {
-    for (int s = 0; s < n_specs; s++) {
-        int found = 0;
-        for (int i = 0; i < MAX_DEVICES && !found; i++) {
-            struct input_id id;
-            if (devs[i] && ioctl(devs[i]->fd, EVIOCGID, &id) >= 0
-                && spec_matches(&specs[s], devs[i]->name, id.vendor, id.product))
-                found = 1;
-        }
-        if (!found)
-            return 1;
+    char paths[MAX_DEVICES][64];
+    int n = n_failed, added = 0;
+
+    for (int i = 0; i < n; i++)
+        memcpy(paths[i], failed[i].path, sizeof(paths[i]));
+    for (int i = 0; i < n; i++)
+        added |= probe_node(paths[i]);
+    if (added)
+        out_sync_caps();
+    if (added || n_failed != n)
+        send_status();
+}
+
+/* A node appeared, changed permissions or went away (inotify on /dev/input). */
+static void device_node_event(const char *name, uint32_t mask)
+{
+    char path[64];
+    int failed_before = n_failed;
+
+    if (strncmp(name, "event", 5) != 0)
+        return;
+    snprintf(path, sizeof(path), "/dev/input/%.40s", name);
+    seen_forget(path);          /* the node may now be a different device */
+    if (mask & IN_DELETE) {
+        failed_forget(path);
+    } else if (probe_node(path)) {
+        out_sync_caps();
+        send_status();
+        return;
     }
-    return 0;
+    if (n_failed != failed_before)
+        send_status();
 }
 
 static void sync_devices(void)
@@ -2154,10 +2243,13 @@ static void kill_previous(void)
  * The engine reloads by itself whenever all_bind.conf is replaced (the GUI
  * and CLI save it), and runs commands dropped in as ".command-<pid>" files.
  * That works even when it runs as a root service the user can't signal.
+ * /dev/input is watched the same way, so plugged-in devices are noticed
+ * without polling.
  * --------------------------------------------------------- */
 
 static int ino_fd = -1;
 static int ino_wd = -1;
+static int ino_wd_dev = -1;
 
 static void watch_config_dir(void)
 {
@@ -2166,6 +2258,8 @@ static void watch_config_dir(void)
     if (ino_fd >= 0 && ino_wd < 0)
         ino_wd = inotify_add_watch(ino_fd, config_dir,
                                    IN_CLOSE_WRITE | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF);
+    if (ino_fd >= 0 && ino_wd_dev < 0)
+        ino_wd_dev = inotify_add_watch(ino_fd, "/dev/input", IN_CREATE | IN_ATTRIB | IN_DELETE);
 }
 
 static int file_owner_ok(const struct stat *st)
@@ -2219,7 +2313,12 @@ static int read_inotify(void)
         for (char *p = buf; p < buf + n;) {
             const struct inotify_event *ev = (const struct inotify_event *)p;
 
-            if (ev->mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF))
+            if (ev->wd == ino_wd_dev && ino_wd_dev >= 0) {
+                if (ev->mask & IN_IGNORED)
+                    ino_wd_dev = -1;
+                else if (ev->len)
+                    device_node_event(ev->name, ev->mask);
+            } else if (ev->mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF))
                 ino_wd = -1;        /* folder gone; re-watched on the next tick */
             else if (ev->len && !strcmp(ev->name, conf_name))
                 changed = 1;
@@ -2622,13 +2721,20 @@ int main(int argc, char **argv)
             reload();
         }
 
+        /*
+         * Light housekeeping only - nothing here opens devices except a busy
+         * one being retried. New devices arrive through inotify.
+         */
         if (time(NULL) - last_scan >= 2) {
-            if (ino_wd < 0)
+            last_scan = time(NULL);
+            if (ino_wd < 0 || ino_wd_dev < 0)
                 watch_config_dir();
             if (!config_loaded && access(config_path, R_OK) == 0)
                 reload();
-            else if (devices_missing())
-                scan_devices();
+            else if (n_failed)
+                retry_failed();
+            else if (ino_wd_dev < 0)
+                scan_devices();     /* no inotify: readdir; known nodes aren't reopened */
         }
     }
 
