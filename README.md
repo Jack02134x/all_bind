@@ -5,6 +5,8 @@ combos, turbo / rapid fire, macros, commands or profile switches. Works on Wayla
 (it sits below the compositor, using evdev and uinput), with a GUI, a CLI and an optional
 root system service.
 
+![all_bind main window: devices, bindings and the live engine log](assets/main-window.png)
+
 - **Any trigger**: every key and button on any grabbed device, scroll-wheel directions and
   controller d-pad directions. A binding can apply to all devices or just one.
 - **Actions**
@@ -124,6 +126,12 @@ Open **all_bind** from your app menu, or run `all_bind --gui` (or `all_bind-gui`
 - **Movement**: inversion and sensitivity for the active profile.
 - **Engine log**: tick *Show physical input events* to see exactly what each button sends.
 - **Restart / Stop** in the top-right, plus the current profile and how many devices are grabbed.
+
+| Turbo | Macro |
+| --- | --- |
+| ![Binding editor: side button turbo-clicks left click at 100 per second](assets/binding-turbo.png) | ![Binding editor: a macro that opens a terminal](assets/binding-macro.png) |
+| **Movement** (a low-sensitivity “Sniper” profile) | **Find device** |
+| ![Movement settings with 0.3× sensitivity](assets/movement.png) | ![Find device: a controller's d-pad was pressed](assets/find-device.png) |
 
 ---
 

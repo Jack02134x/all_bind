@@ -2102,7 +2102,7 @@ class FindDeviceDialog(QDialog):
         for b in (self.again, self.show_btn, self.grab_btn, close):
             b.setAutoDefault(False)
         lay.addLayout(row)
-        self.resize(560, 460)
+        self.resize(580, 540)   # room for long device names that wrap
 
         self.probe = DeviceProbe()
         self.probe.hit.connect(self._on_hit)
