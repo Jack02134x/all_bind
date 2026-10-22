@@ -300,6 +300,11 @@ make clean
 Next to `all_bind.c` the GUI uses the `./all_bind` it builds; installed, it uses
 `/usr/bin/all_bind`. Either way the config is `~/.config/all_bind/`.
 
+## Credits
+
+Designed and tested by jack. Written with the help of
+[Claude](https://claude.ai) (Anthropic's AI assistant) in [Claude Code](https://claude.com/claude-code).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
