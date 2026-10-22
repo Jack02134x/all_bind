@@ -210,8 +210,8 @@ all_bind prev      # previous profile
 Bind them to keys, e.g. in Hyprland:
 
 ```ini
-hl.bind(.. " + F9 ",         hl.dsp.exec_cmd("all_bind next"))
-hl.bind(.. " + SHIFT + F9",  hl.dsp.exec_cmd("all_bind prev"))
+hl.bind("F9",         hl.dsp.exec_cmd("all_bind next"))
+hl.bind("SHIFT + F9",  hl.dsp.exec_cmd("all_bind prev"))
 ```
 
 …or to a mouse button inside all_bind itself: add a binding with **Run command** →
